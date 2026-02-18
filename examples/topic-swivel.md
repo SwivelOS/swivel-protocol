@@ -20,7 +20,6 @@ mode: active
 - **status**: in progress
 - **started**: 2026-02-18T10:00:00Z
 - **next**: finish authentication module
-- **blockers**: none
 
 ## Files
 <!-- What code, docs, or data matters. -->
@@ -37,3 +36,7 @@ mode: active
 <!-- Key choices made during this work. -->
 [2026-02-18] Using OAuth 2.0 for authentication (standard, well-documented)
 [2026-02-18] Python 3.11 for async support
+
+## Blockers
+<!-- Remove when resolved. Add when blocked. -->
+- None

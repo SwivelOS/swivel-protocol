@@ -19,7 +19,6 @@ mode: active
 - **status**: in progress
 - **started**: 2026-02-18T10:00:00Z
 - **next**: specific next action
-- **blockers**: none
 
 ## Files
 <!-- What code, docs, or data matters. -->
