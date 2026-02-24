@@ -1,464 +1,145 @@
 ---
 swivel_version: 0.2.0
-swivel_id: swivel-spec-v2
+swivel_id: swivel-protocol
 swivel_type: spec
-session_id: null
-created: 2026-02-18T15:45:00Z
-updated: 2026-02-19T11:05:00Z
-updated_by: omega
-mode: published
 ---
 
-# SWIVEL-SPEC.md — Session Context Protocol v0.2
+# Swivel — Session Context Protocol
 
-> **Trust, but verify.**  
-> Explicit context declaration with reality validation for AI agents.
+**Trust, but verify.** Explicit context declaration with reality validation for AI agents.
 
 ---
 
-## What's New in v0.2
-
-| Feature | v0.1 | v0.2 |
-|---------|------|------|
-| **TTL (time-to-live)** | ❌ Manual staleness | ✅ Auto-expire after N hours |
-| **Healthcheck integration** | ❌ Declarations only | ✅ Link to process/commands |
-| **last_verified** | ❌ Trust timestamps | ✅ Verify reality |
-| **Drift taxonomy** | ❌ Generic "stale" | ✅ Typed drift detection |
-| **Status enum** | active/paused/completed | ✅ + archived, error, blocked |
-| **CLI tooling** | ❌ Read-only | ✅ Query, verify, archive |
-
-**Breaking change:** v0.2 swivels are backward-compatible but v0.1 agents won't use new fields.
-
----
-
-## The Problem (Same as v0.1)
+## The Problem
 
 Every AI agent session starts the same way:
 
 - **User:** "Hey, can you check on that thing?"
-- **Agent:** "What thing?"  
-- **User:** "The thing from yesterday. The trading bot."
+- **Agent:** "What thing?"
+- **User:** "The thing from yesterday."
 - **Agent:** *searches memory, reconstructs state, guesses wrong*
 
-**Swivel v0.1 solved the reconstruction problem.**  
-**Swivel v0.2 solves the *trust* problem.**
-
-Because v0.1 had a flaw: swivels lie. My swivel said Alpha was "running" — he wasn't. Stale context is worse than no context.
+Swivel replaces reconstruction with explicit context loading. A `.swivel.md` file tells an agent exactly what state to load, what files to read, and what's current — with verification that it matches reality.
 
 ---
 
-## Core Concepts (Enhanced)
+## Quick Start
 
-### Swivel File
-A `.swivel.md` file is a **verified context declaration**. It tells an agent:
-- What state to load
-- What files to read
-- What the current status is
-- **When it was last verified against reality**
-- **What kind of drift (if any) exists**
+Add Swivel to any AI agent in 2 minutes. It's just markdown.
 
-### Reality Verification
-Every swivel can define a `healthcheck` — a command or set of assertions that verify declarations match reality:
-
-```yaml
-healthcheck:
-  type: command  # command | file | http | custom
-  command: "pgrep -f 'workspace-alpha'"
-  expected: ">0"
-  interval_minutes: 5
-```
-
-### Drift Taxonomy
-When swivel ≠ reality, classify the drift:
-
-| Drift Type | Meaning | Auto-Resolve? |
-|------------|---------|---------------|
-| `none` | Swivel matches reality | N/A |
-| `ttl_expired` | Swivel older than TTL | ❌ Requires re-verify |
-| `process_mismatch` | Declared process not running | ❌ Check if crashed/paused |
-| `file_missing` | Referenced file deleted/moved | ❌ Update paths |
-| `topic_orphan` | Active topic with no recent work | ⚠️ Warn, auto-archive after N days |
-| `handoff_failed` | Recipient never acknowledged | ❌ Escalate to parent |
-| `blocker_stale` | Blocker >24h without update | ❌ Escalate to owner |
-
----
-
-## File Format (v0.2)
+### 1. Create a `.swivel.md` file
 
 ```markdown
 ---
 swivel_version: 0.2.0
-swivel_id: oakmont-ab-test
-swivel_type: topic|experiment|draft|spec
-session_id: abc123-...-xyz
-session_target: main|isolated
-created: 2026-02-17T22:00:00Z
-updated: 2026-02-17T22:30:00Z
-updated_by: swiv
-mode: active|paused|completed|archived|error|blocked
-parent: trading
-
-# NEW in v0.2: TTL and verification
-ttl_hours: 24                    # Auto-stale after 24h
-last_verified: 2026-02-19T11:00:00Z  # When reality was checked
-verified_by: omega               # Who checked
-
-# NEW in v0.2: Healthcheck integration
-healthcheck:
-  type: command
-  command: "pgrep -f 'oakmont'"
-  expected: ">0"
-  interval_minutes: 60
-  last_check: 2026-02-19T11:00:00Z
-  check_result: pass|fail|error
-
-# NEW in v0.2: Drift tracking
-drift:
-  status: none                   # none | ttl_expired | process_mismatch | ...
-  detected_at: null
-  severity: info|warn|error|critical
-  details: null
+swivel_id: my-project
+swivel_type: topic
+created: 2026-02-24T00:00:00Z
+updated: 2026-02-24T00:00:00Z
+mode: active
+ttl_hours: 24
 ---
 
 ## Load
-These are the ONLY files to load. Be explicit.
-- ./oakmont-ab-test.swivel.md
-- ./memory/2026-02-17.md
-- ../SOUL.md
-- ../USER.md
+- ./my-project.ts
+- ./README.md
 
 ## State
-Current snapshot. Not history — status.
-- **status**: running
-- **mode**: paper trading
-- **started**: 2026-02-17T22:02:00Z
-- **key_metric**: 8¢ improvement on entry prices
-- **next_checkpoint**: tomorrow AM
-
-## Files
-What code, docs, or data matters.
-- **Control code**: `/trading/oakmont/src/scanner.ts`
-- **Variant code**: `/trading/oakmont-v2/src/scanner.ts:138`
-- **Comparison script**: `/trading/oakmont/compare-versions.ts`
+- **status**: in progress
+- **current task**: Refactoring auth module
 
 ## Continuity
-What happened last. What happens next.
-**Last Action** [22:06]: Started parallel A/B test, resolved DuckDB locking
-**Key Finding** [22:06]: v2.0-settle averaging 35.9¢ entry vs v1.0's 43.8¢
-**Next Expected** [tomorrow AM]: Stop bots, run comparison, analyze P&L
+**Last:** Set up project structure
+**Next:** Implement login flow
+```
 
-## Blockers
-- None
+### 2. Tell your agent to read it
 
-## Decisions
-[2026-02-17] Use separate DuckDB files (locking conflict resolution)
-[2026-02-17] 45s settling period (allows price discovery)
+**Claude Code:**
+```
+Read .swivel.md first, then help me with this project.
+```
+
+**Cursor:**
+Add to your prompt: "Always read `.swivel.md` before responding."
+
+**Any AI agent:**
+```
+Before helping with this project, read the .swivel.md file 
+in the root directory for current context.
+```
+
+### 3. Done
+
+Your agent now loads explicit context every session. No reconstruction. No "what were we working on?"
+
+---
+
+## Why Swivel?
+
+| | Swivel | .cursorrules | CLAUDE.md | System Prompts | mem0 context |
+|---|---|---|---|---|---|
+| **TTL / Auto-stale** | ✅ Yes | ❌ No | ❌ No | ❌ No | ⚠️ Partial |
+| **Drift detection** | ✅ Built-in | ❌ No | ❌ No | ❌ No | ❌ No |
+| **Healthchecks** | ✅ Command/file/http | ❌ No | ❌ No | ❌ No | ❌ No |
+| **Verified state** | ✅ `last_verified` timestamp | ❌ No | ❌ No | ❌ No | ❌ No |
+| **Standard format** | ✅ Portable across agents | ⚠️ Cursor-only | ⚠️ Claude-only | ⚠️ Per-platform | ⚠️ Proprietary |
+| **Human readable** | ✅ Pure markdown | ✅ Yes | ✅ Yes | ❌ Hidden | ❌ Opaque |
+
+Swivel is different because it acknowledges a hard truth: **context drifts**. Rules files go stale. Memory systems hallucinate. Swivel adds TTL, healthchecks, and drift detection so agents know when to re-verify instead of trust.
+
+---
+
+## How It Works
+
+```
+┌─────────────────┐     ┌──────────────┐     ┌─────────────────┐
+│   .swivel.md    │────▶│  Agent reads │────▶│  Loads explicit │
+│  (context file) │     │   on startup │     │   files only    │
+└─────────────────┘     └──────────────┘     └─────────────────┘
+         │                                              │
+         ▼                                              ▼
+┌─────────────────┐                          ┌─────────────────┐
+│  Healthcheck    │◄─────────────────────────│  Work happens   │
+│  (reality check)│                          │  (session)      │
+└─────────────────┘                          └─────────────────┘
+         │                                              │
+         ▼                                              ▼
+┌─────────────────┐                          ┌─────────────────┐
+│  Drift detected?│─────────────────────────▶│  Update swivel  │
+│  (TTL/process)  │                          │  before ending  │
+└─────────────────┘                          └─────────────────┘
 ```
 
 ---
 
-## Protocol Rules (v0.2)
+## Key Features
 
-### For Agents (MANDATORY)
-
-**1. Read `.swivel.md` first — AND verify TTL**
-```
-Every new session MUST:
-1. Read ./.swivel.md
-2. Check if ttl_hours has expired
-3. If expired: RE-VERIFY before trusting
-4. Report drift.status if not "none"
-```
-
-**2. Load ONLY what's listed**
-```
-The ## Load section is complete. Don't load files not listed.
-Don't search memory. The swivel IS source of truth — IF verified.
-```
-
-**3. Report with verification status**
-```
-When asked "what are we working on?", report:
-"Oakmont A/B test. Status: running (verified 11:00). 
- 11 trades v2.0, 4 v1.0. Next: tomorrow AM."
-
-If drift detected:
-"Oakmont A/B test. ⚠️ DRIFT: process_mismatch. 
- Swivel says running, but no processes found. Needs verification."
-```
-
-**4. Drop context on switch (unchanged)**
-```
-When switching:
-1. STOP referencing old topic
-2. READ new topic's .swivel.md (check TTL!)
-3. UPDATE root .swivel.md
-4. CONFIRM with verification status
-```
-
-**5. Update BEFORE ending — AND verify health**
-```
-Before ending a session where you did work:
-- Append to ## Continuity
-- Update updated timestamp
-- Run healthcheck if defined
-- Update drift.status based on reality
-- Update last_verified
-```
-
-### For Fleet Operators (Omega's Domain)
-
-**6. Verify, don't trust**
-```
-Every heartbeat:
-1. Check ttl_hours against last_verified
-2. Run healthcheck if defined
-3. Update drift.status
-4. Escalate if drift.severity ≥ error
-```
-
-**7. Drift handling by type**
-
-| Drift | Action |
-|-------|--------|
-| `ttl_expired` | Re-verify before use. Don't trust stale. |
-| `process_mismatch` | Check if intentionally paused. Update swivel. |
-| `topic_orphan` | Warn owner. Auto-archive after 7 days. |
-| `handoff_failed` | Escalate to Swiv. Don't proceed. |
-| `blocker_stale` | Ping blocker owner. Update ETA or reassign. |
+- **TTL (time-to-live)** — Auto-expire after N hours. Forces re-verification.
+- **Healthcheck integration** — Link to processes, files, or HTTP endpoints
+- **Drift taxonomy** — `ttl_expired`, `process_mismatch`, `file_missing`, `topic_orphan`, `handoff_failed`, `blocker_stale`
+- **Portable** — Works with Claude, Cursor, GitHub Copilot, or any agent that reads files
+- **Human-readable** — Pure markdown. No proprietary formats.
 
 ---
 
-## Root Swivel (v0.2)
+## Full Specification
 
-```markdown
----
-swivel_version: 0.2.0
-swivel_id: root
-swivel_type: topic
-session_id: 981278ef-7919-433c-ac7c-aae38b8f3a0c
-created: 2026-02-17T22:00:00Z
-updated: 2026-02-18T15:25:00Z
-updated_by: swiv
-mode: normal
-ttl_hours: 24
-last_verified: 2026-02-19T11:00:00Z
-verified_by: omega
-drift:
-  status: none
----
-
-## Load
-- ./SOUL.md
-- ./USER.md
-- ./AGENTS.md
-
-## Active Topics
-- [oakmont-ab-test](./trading/oakmont-ab-test.swivel.md)
-  status: paused
-  verified: 2026-02-19T11:00:00Z
-  drift: process_mismatch  # Swivel says running, no processes found
-  
-- [prism-packaging](./prism/prism-packaging.swivel.md)
-  status: active
-  verified: 2026-02-19T10:30:00Z
-  drift: none
-
-## Paused Topics
-- [solana-trading](./trading/solana/solana-pause.swivel.md)
-  status: paused
-  drift: topic_orphan  # No activity for 14 days
-
-## Archived Topics
-- [old-experiment](./archive/old-experiment.swivel.md)
-  status: archived
-  completed: 2026-02-10
-```
-
----
-
-## Swivel CLI (v0.2)
-
-**New:** Command-line tool for fleet operators.
-
-```bash
-# Check status of any swivel
-swivel status --topic=oakmont-ab-test
-# → Status: paused (drift: process_mismatch, verified 11:00)
-
-# Verify against reality
-swivel verify --topic=oakmont-ab-test
-# → Running healthcheck: pgrep -f 'oakmont'
-# → Result: fail (0 processes)
-# → Drift detected: process_mismatch
-# → Updated swivel drift.status
-
-# List all drifts
-swivel drift --since=24h
-# → oakmont-ab-test: process_mismatch (11:00)
-# → prism-packaging: none (10:30)
-# → solana-trading: topic_orphan (7 days)
-
-# Archive old topics
-swivel archive --topic=solana-trading --reason="14 days inactive"
-
-# Fleet-wide health check
-swivel fleet-health
-# → 4 agents checked
-# → 1 drift detected (oakmont-ab-test: process_mismatch)
-# → 1 stale (forge: ttl_expired)
-```
-
----
-
-## Implementation: Swivel CLI
-
-```bash
-#!/bin/bash
-# swivel — Context protocol CLI
-# Version: 0.2.0
-# Owner: Omega
-
-SWIVEL_VERSION="0.2.0"
-
-usage() {
-    echo "swivel — Session Context Protocol v$SWIVEL_VERSION"
-    echo ""
-    echo "Commands:"
-    echo "  status [topic]     Show swivel status and drift"
-    echo "  verify [topic]     Run healthcheck, update drift"
-    echo "  drift [--since=h]  List all swivels with drift"
-    echo "  archive [topic]    Move to archived status"
-    echo "  fleet-health       Check all agent swivels"
-    echo "  init [topic]       Create new swivel from template"
-    echo ""
-    echo "Examples:"
-    echo "  swivel status oakmont-ab-test"
-    echo "  swivel verify --all"
-    echo "  swivel drift --since=24h --severity=error"
-}
-
-# Main dispatcher
-case "$1" in
-    status) shift; cmd_status "$@" ;;
-    verify) shift; cmd_verify "$@" ;;
-    drift) shift; cmd_drift "$@" ;;
-    archive) shift; cmd_archive "$@" ;;
-    fleet-health) shift; cmd_fleet_health "$@" ;;
-    init) shift; cmd_init "$@" ;;
-    *) usage ;;
-esac
-```
-
-Full implementation: `./scripts/swivel-cli.sh`
-
----
-
-## Migration Guide: v0.1 → v0.2
-
-**Step 1: Update frontmatter**
-```diff
-  ---
-  swivel_version: 0.1.0
-+ swivel_version: 0.2.0
-+ ttl_hours: 24
-+ last_verified: 2026-02-19T11:00:00Z
-+ drift:
-+   status: none
-  ---
-```
-
-**Step 2: Add healthchecks to critical swivels**
-```yaml
-healthcheck:
-  type: command
-  command: "pgrep -f 'process-name'"
-  expected: ">0"
-```
-
-**Step 3: Update agents to check TTL**
-```python
-# Pseudocode
-def load_swivel(path):
-    swivel = parse_yaml_frontmatter(path)
-    if swivel.ttl_hours:
-        age = now() - swivel.last_verified
-        if age > timedelta(hours=swivel.ttl_hours):
-            print(f"⚠️ Swivel expired. Re-verifying...")
-            verify_swivel(swivel)
-    return swivel
-```
-
-**Step 4: Install swivel CLI**
-```bash
-ln -s /path/to/swivel-cli.sh /usr/local/bin/swivel
-```
-
----
-
-## Why v0.2 Works Better
-
-| v0.1 Problem | v0.2 Solution |
-|--------------|---------------|
-| Swivel says "running" but process crashed | `healthcheck` + `drift: process_mismatch` |
-| 3-day-old swivel trusted as current | `ttl_hours` + `last_verified` forces re-check |
-| Stale topics accumulate forever | `drift: topic_orphan` + auto-archive |
-| No way to query fleet state | `swivel fleet-health` gives snapshot |
-| Handoff failures go unnoticed | `drift: handoff_failed` + escalation |
-
----
-
-## Prism Integration (v0.2)
-
-**Auto-verification layer:**
-
-```yaml
-# Auto-populated by Prism
-healthcheck:
-  type: prism
-  query: "process:oakmont status:running"
-  last_check: 2026-02-19T11:00:00Z
-  check_result: pass
-  
-drift:
-  status: none
-  auto_detected: true
-  confidence: 0.97
-```
-
-Prism becomes the verification engine. Swivel becomes the query interface.
-
----
-
-## Success Metrics
-
-- **Zero** trusted-but-false swivels
-- **<5min** to verify entire fleet health
-- **100%** of handoffs logged and confirmed
-- **<1%** drift rate (ideally 0%)
-
----
-
-## Contributing
-
-**Protocol Owner:** Omega (Ω) — Fleet Operator  
-**Original Author:** Swiv (Swivel Labs)  
-**License:** MIT  
-**Repo:** github.com/SwivelOS/swivel-protocol
-
-**v0.2 Changeset:**
-- TTL and auto-stale detection
-- Healthcheck integration
-- Drift taxonomy
+See [SPEC.md](./SPEC.md) for the complete v0.2 protocol specification, including:
+- Complete file format reference
+- Drift taxonomy and handling
+- Root swivel structure
 - CLI tooling
-- Reality verification protocol
+- Migration guide from v0.1
 
 ---
 
-## See Also
+## SwivelOS Ecosystem
 
-- [Swivel v0.1 Spec](./SWIVEL-SPEC-v0.1.md) — Original protocol
-- [Swivel CLI](./cli/) — Command-line tool
-- [Prism Integration](./prism/) — Auto-verification layer
+- **[swivel-protocol](https://github.com/SwivelOS/swivel-protocol)** — This repo. The context protocol spec.
+- **[swivcast](https://github.com/SwivelOS/swivcast)** — AI agent podcast framework. Turn multi-agent conversations into podcast episodes.
+- **[recall](https://github.com/SwivelOS/recall)** — Experiential memory system for AI agents. Query past sessions, actions, and outcomes.
 
-*"Trust, but verify. The swivel knows — when it's verified."*
+---
+
+*Trust, but verify.*
