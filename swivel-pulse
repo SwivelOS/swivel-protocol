@@ -1,0 +1,120 @@
+#!/bin/bash
+# pulse.sh — Swivel state pulse check
+# v0.3 — Zero tokens. Runs every 5 min via cron.
+# Updates root swivel via swivel-update.sh.
+#
+# Checks:
+#   1. Penpal new letters (unread files in penpal/)
+#   2. File staleness (topic swivels past stale_after_hours)
+#   3. VPS reachability (hazel, vanguard)
+#   4. Pulse timestamp update
+
+set -euo pipefail
+
+# ── Config ───────────────────────────────────────────────────────────────────
+AGENT="${PULSE_AGENT:-swiv}"
+WORKSPACE="${PULSE_WORKSPACE:-$HOME/.openclaw/workspace}"
+SWIVEL_FILE="${PULSE_SWIVEL:-$WORKSPACE/.swivel.md}"
+UPDATE_BIN="${PULSE_UPDATE_BIN:-$(dirname "$0")/swivel-update.sh}"
+LOG_FILE="${PULSE_LOG:-/tmp/pulse-${AGENT}.log}"
+PENPAL_DIR="${WORKSPACE}/penpal"
+VPS_HAZEL="100.105.20.79"
+VPS_VANGUARD="100.112.226.63"
+
+# ── Validate ─────────────────────────────────────────────────────────────────
+if [[ ! -f "$SWIVEL_FILE" ]]; then
+    echo "$(date): pulse: swivel file not found: $SWIVEL_FILE" >> "$LOG_FILE"
+    exit 0  # Don't fail — file may not be created yet
+fi
+
+if [[ ! -x "$UPDATE_BIN" ]]; then
+    echo "$(date): pulse: swivel-update.sh not found or not executable: $UPDATE_BIN" >> "$LOG_FILE"
+    exit 1
+fi
+
+# Helpers
+log() { echo "$(date '+%Y-%m-%dT%H:%M:%S'): $*" >> "$LOG_FILE"; }
+update() { "$UPDATE_BIN" --file "$SWIVEL_FILE" "$@" 2>> "$LOG_FILE"; }
+
+log "pulse start"
+
+# ── 1. Pulse timestamp ───────────────────────────────────────────────────────
+update pulse
+
+# ── 2. Penpal — new unread letters ──────────────────────────────────────────
+if [[ -d "$PENPAL_DIR" ]]; then
+    # "Unread" = files modified in last 60 min not yet acknowledged
+    # Check for any .md files newer than the swivel file itself
+    SWIVEL_MTIME=$(stat -f "%m" "$SWIVEL_FILE" 2>/dev/null || stat -c "%Y" "$SWIVEL_FILE" 2>/dev/null || echo 0)
+    NEW_LETTER=""
+    while IFS= read -r -d '' f; do
+        FMTIME=$(stat -f "%m" "$f" 2>/dev/null || stat -c "%Y" "$f" 2>/dev/null || echo 0)
+        if [[ "$FMTIME" -gt "$SWIVEL_MTIME" ]]; then
+            NEW_LETTER="$f"
+            break
+        fi
+    done < <(find "$PENPAL_DIR" -name "*.md" -print0 2>/dev/null)
+    
+    if [[ -n "$NEW_LETTER" ]]; then
+        LETTER_NAME=$(basename "$NEW_LETTER" .md)
+        update alert-add "penpal-new" "New letter: $LETTER_NAME"
+        log "penpal: new letter detected: $LETTER_NAME"
+    fi
+fi
+
+# ── 3. File staleness — scan topic swivels ────────────────────────────────────
+# Walk workspace for *.swivel.md files (not root .swivel.md)
+NOW_EPOCH=$(date +%s)
+STALE_FOUND=0
+
+while IFS= read -r -d '' swivel_f; do
+    [[ "$(basename "$swivel_f")" == ".swivel.md" ]] && continue  # skip root
+    
+    # Extract stale_after_hours and touched from frontmatter
+    STALE_HOURS=$(grep -m1 '^stale_after_hours:' "$swivel_f" 2>/dev/null | sed 's/.*: //' | tr -d '[:space:]' || echo "")
+    TOUCHED=$(grep -m1 '^touched:' "$swivel_f" 2>/dev/null | sed 's/touched: //' | tr -d '[:space:]' || echo "")
+    
+    [[ -z "$STALE_HOURS" || -z "$TOUCHED" ]] && continue
+    [[ "$STALE_HOURS" -le 0 ]] && continue
+    
+    # Parse touched timestamp to epoch
+    TOUCHED_EPOCH=$(date -d "$TOUCHED" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%S%z" "$TOUCHED" +%s 2>/dev/null || echo 0)
+    [[ "$TOUCHED_EPOCH" -eq 0 ]] && continue
+    
+    AGE_HOURS=$(( (NOW_EPOCH - TOUCHED_EPOCH) / 3600 ))
+    
+    if [[ "$AGE_HOURS" -ge "$STALE_HOURS" ]]; then
+        TOPIC_NAME=$(grep -m1 '^topic:' "$swivel_f" 2>/dev/null | sed 's/topic: //' | tr -d '[:space:]' || basename "$swivel_f" .swivel.md)
+        update alert-add "stale-${TOPIC_NAME}" "Stale ${AGE_HOURS}h: $TOPIC_NAME"
+        log "stale: $TOPIC_NAME is ${AGE_HOURS}h old (threshold: ${STALE_HOURS}h)"
+        STALE_FOUND=$((STALE_FOUND + 1))
+    fi
+done < <(find "$WORKSPACE" -name "*.swivel.md" -print0 2>/dev/null)
+
+# ── 4. VPS reachability ───────────────────────────────────────────────────────
+# Only run for agents on the laptop (swiv, omega, alpha, forge)
+if [[ "$AGENT" == "swiv" ]]; then
+    # Hazel
+    if ssh -o ConnectTimeout=5 -o BatchMode=yes "root@${VPS_HAZEL}" "echo ok" &>/dev/null; then
+        update watch "hazel-vps" "OK"
+        log "watch: hazel OK"
+    else
+        update watch "hazel-vps" "DOWN"
+        update alert-add "hazel-down" "Hazel VPS unreachable"
+        log "watch: hazel DOWN"
+    fi
+
+    # Vanguard/Signal VPS
+    if ssh -o ConnectTimeout=5 -o BatchMode=yes "root@${VPS_VANGUARD}" "echo ok" &>/dev/null; then
+        update watch "signal-vps" "OK"
+        update watch "vanguard-vps" "OK"
+        log "watch: vanguard/signal OK"
+    else
+        update watch "signal-vps" "DOWN"
+        update watch "vanguard-vps" "DOWN"
+        update alert-add "vanguard-down" "Vanguard/Signal VPS unreachable"
+        log "watch: vanguard/signal DOWN"
+    fi
+fi
+
+log "pulse done (stale: $STALE_FOUND)"

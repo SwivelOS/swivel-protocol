@@ -1,0 +1,246 @@
+#!/bin/bash
+# swivel-update.sh — Surgical swivel state register updates
+# v0.3 — Zero tokens. Pure bash + sed.
+#
+# Usage:
+#   swivel-update.sh active <topic> <status>           # update active topic status
+#   swivel-update.sh watch <name> <status>             # update watch item + last timestamp
+#   swivel-update.sh alert-add <key> <message>         # add/replace an alert
+#   swivel-update.sh alert-clear <key>                 # remove a specific alert line
+#   swivel-update.sh alerts-clear                      # reset all alerts to (none)
+#   swivel-update.sh penpal sent <date>                # update last_sent
+#   swivel-update.sh penpal received <date>            # update last_received
+#   swivel-update.sh pulse [timestamp]                 # update pulse timestamp (default: now)
+#   swivel-update.sh updated [timestamp]               # update updated timestamp (default: now)
+#   swivel-update.sh topic-add <name> <status> <path>  # append new active topic
+#   swivel-update.sh topic-done <name>                 # mark topic DONE
+#
+# Options:
+#   --file <path>   target swivel file (default: $SWIVEL_ROOT or ./.swivel.md)
+#
+# Examples:
+#   swivel-update.sh active "vanguard-build" "SHIPPED"
+#   swivel-update.sh watch "vps-signal" "DOWN"
+#   swivel-update.sh alert-add "signal-gap" "Signal missed 3 heartbeats"
+#   swivel-update.sh penpal sent "2026-02-24"
+#   swivel-update.sh pulse
+
+set -euo pipefail
+
+# ── Detect file ──────────────────────────────────────────────────────────────
+SWIVEL_FILE=""
+ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --file)
+            SWIVEL_FILE="$2"
+            shift 2
+            ;;
+        *)
+            ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+set -- "${ARGS[@]}"
+
+if [[ -z "$SWIVEL_FILE" ]]; then
+    if [[ -n "${SWIVEL_ROOT:-}" ]]; then
+        SWIVEL_FILE="$SWIVEL_ROOT"
+    else
+        SWIVEL_FILE="./.swivel.md"
+    fi
+fi
+
+if [[ ! -f "$SWIVEL_FILE" ]]; then
+    echo "swivel-update: file not found: $SWIVEL_FILE" >&2
+    exit 1
+fi
+
+# ── Portable in-place sed ────────────────────────────────────────────────────
+# BSD (macOS) needs -i '' ; GNU (Linux) needs -i
+sedi() {
+    if [[ "$(uname)" == "Darwin" ]]; then
+        sed -i '' "$@"
+    else
+        sed -i "$@"
+    fi
+}
+
+# ── Timestamp helper ─────────────────────────────────────────────────────────
+now_iso() {
+    # ISO 8601 with local timezone offset
+    if [[ "$(uname)" == "Darwin" ]]; then
+        date +"%Y-%m-%dT%H:%M:%S%z" | sed 's/\([+-][0-9][0-9]\)\([0-9][0-9]\)$/\1:\2/'
+    else
+        date --iso-8601=seconds
+    fi
+}
+
+COMMAND="${1:-}"
+shift || true
+
+# ── Commands ─────────────────────────────────────────────────────────────────
+
+case "$COMMAND" in
+
+  # ── active <topic> <status> ──────────────────────────────────────────────
+  active)
+    TOPIC="${1:?usage: swivel-update.sh active <topic> <status>}"
+    STATUS="${2:?usage: swivel-update.sh active <topic> <status>}"
+    # Match: "- <topic> | <anything> |"
+    # Replace the status segment (between 1st and 2nd pipe)
+    # Line format: - topic | STATUS | path/or/note
+    ESCAPED_TOPIC=$(printf '%s\n' "$TOPIC" | sed 's/[[\.*^$()+?{|]/\\&/g')
+    sedi "s/^\\(- ${ESCAPED_TOPIC} | \\)[^|]*\\(|.*\\)$/\\1${STATUS} \\2/" "$SWIVEL_FILE"
+    sedi "s/\(updated: \).*/\1$(now_iso)/" "$SWIVEL_FILE"
+    echo "swivel: active '$TOPIC' → $STATUS"
+    ;;
+
+  # ── watch <name> <status> ────────────────────────────────────────────────
+  watch)
+    NAME="${1:?usage: swivel-update.sh watch <name> <status>}"
+    STATUS="${2:?usage: swivel-update.sh watch <name> <status>}"
+    TS=$(now_iso)
+    ESCAPED_NAME=$(printf '%s\n' "$NAME" | sed 's/[[\.*^$()+?{|]/\\&/g')
+    # Line format: - name | STATUS | last: timestamp
+    # Replace entire line if it matches the name
+    sedi "s/^\\(- ${ESCAPED_NAME} | \\)[^|]* | last:.*$/\\1${STATUS} | last: ${TS}/" "$SWIVEL_FILE"
+    sedi "s/\(updated: \).*/\1$(now_iso)/" "$SWIVEL_FILE"
+    echo "swivel: watch '$NAME' → $STATUS (last: $TS)"
+    ;;
+
+  # ── alert-add <key> <message> ────────────────────────────────────────────
+  alert-add)
+    KEY="${1:?usage: swivel-update.sh alert-add <key> <message>}"
+    MSG="${2:?usage: swivel-update.sh alert-add <key> <message>}"
+    ESCAPED_KEY=$(printf '%s\n' "$KEY" | sed 's/[[\.*^$()+?{|]/\\&/g')
+    if grep -q "^- ${KEY}:" "$SWIVEL_FILE" 2>/dev/null; then
+        # Update existing alert line
+        sedi "s/^- ${ESCAPED_KEY}:.*$/- ${KEY}: ${MSG}/" "$SWIVEL_FILE"
+    elif grep -q "^(none)$" "$SWIVEL_FILE" 2>/dev/null; then
+        # Replace (none) with new alert
+        sedi "s/^(none)$/- ${KEY}: ${MSG}/" "$SWIVEL_FILE"
+    else
+        # Append after "## Alerts" section header
+        sedi "/^## Alerts$/a\\
+- ${KEY}: ${MSG}" "$SWIVEL_FILE"
+    fi
+    sedi "s/\(updated: \).*/\1$(now_iso)/" "$SWIVEL_FILE"
+    echo "swivel: alert-add '$KEY': $MSG"
+    ;;
+
+  # ── alert-clear <key> ───────────────────────────────────────────────────
+  alert-clear)
+    KEY="${1:?usage: swivel-update.sh alert-clear <key>}"
+    ESCAPED_KEY=$(printf '%s\n' "$KEY" | sed 's/[[\.*^$()+?{|]/\\&/g')
+    sedi "/^- ${ESCAPED_KEY}:/d" "$SWIVEL_FILE"
+    sedi "s/\(updated: \).*/\1$(now_iso)/" "$SWIVEL_FILE"
+    echo "swivel: alert-clear '$KEY'"
+    ;;
+
+  # ── alerts-clear ────────────────────────────────────────────────────────
+  alerts-clear)
+    # Replace everything between "## Alerts" and next "##" with (none)
+    # This is tricky with sed alone; use awk or python
+    python3 - "$SWIVEL_FILE" <<'PYEOF'
+import sys, re
+f = sys.argv[1]
+with open(f) as fh:
+    content = fh.read()
+# Replace content of Alerts section with (none)
+content = re.sub(
+    r'(## Alerts\n)(?:[^\n]*\n)*?(\n## )',
+    r'\g<1>(none)\n\n## ',
+    content
+)
+with open(f, 'w') as fh:
+    fh.write(content)
+PYEOF
+    sedi "s/\(updated: \).*/\1$(now_iso)/" "$SWIVEL_FILE"
+    echo "swivel: alerts cleared"
+    ;;
+
+  # ── penpal <sent|received> <date> ───────────────────────────────────────
+  penpal)
+    DIRECTION="${1:?usage: swivel-update.sh penpal <sent|received> <date>}"
+    DATE="${2:?usage: swivel-update.sh penpal <sent|received> <date>}"
+    case "$DIRECTION" in
+        sent)
+            sedi "s/\(- last_sent: \).*/\1${DATE}/" "$SWIVEL_FILE"
+            ;;
+        received)
+            sedi "s/\(- last_received: \).*/\1${DATE}/" "$SWIVEL_FILE"
+            ;;
+        *)
+            echo "swivel-update: penpal direction must be 'sent' or 'received'" >&2
+            exit 1
+            ;;
+    esac
+    sedi "s/\(updated: \).*/\1$(now_iso)/" "$SWIVEL_FILE"
+    echo "swivel: penpal $DIRECTION → $DATE"
+    ;;
+
+  # ── pulse [timestamp] ───────────────────────────────────────────────────
+  pulse)
+    TS="${1:-$(now_iso)}"
+    sedi "s/\(pulse: \).*/\1${TS}/" "$SWIVEL_FILE"
+    sedi "s/\(updated: \).*/\1$(now_iso)/" "$SWIVEL_FILE"
+    echo "swivel: pulse → $TS"
+    ;;
+
+  # ── updated [timestamp] ─────────────────────────────────────────────────
+  updated)
+    TS="${1:-$(now_iso)}"
+    sedi "s/\(updated: \).*/\1${TS}/" "$SWIVEL_FILE"
+    echo "swivel: updated → $TS"
+    ;;
+
+  # ── topic-add <name> <status> <path> ────────────────────────────────────
+  topic-add)
+    NAME="${1:?usage: swivel-update.sh topic-add <name> <status> <path>}"
+    STATUS="${2:?usage: swivel-update.sh topic-add <name> <status> <path>}"
+    TPATH="${3:?usage: swivel-update.sh topic-add <name> <status> <path>}"
+    # Append after "## Active" section header
+    sedi "/^## Active$/a\\
+- ${NAME} | ${STATUS} | ${TPATH}" "$SWIVEL_FILE"
+    sedi "s/\(updated: \).*/\1$(now_iso)/" "$SWIVEL_FILE"
+    echo "swivel: topic-add '$NAME' | $STATUS | $TPATH"
+    ;;
+
+  # ── topic-done <name> ───────────────────────────────────────────────────
+  topic-done)
+    NAME="${1:?usage: swivel-update.sh topic-done <name>}"
+    ESCAPED_NAME=$(printf '%s\n' "$NAME" | sed 's/[[\.*^$()+?{|]/\\&/g')
+    sedi "s/^\\(- ${ESCAPED_NAME} | \\)[^|]*\\(|.*\\)$/\\1DONE \\2/" "$SWIVEL_FILE"
+    sedi "s/\(updated: \).*/\1$(now_iso)/" "$SWIVEL_FILE"
+    echo "swivel: '$NAME' → DONE"
+    ;;
+
+  *)
+    cat >&2 <<'USAGE'
+swivel-update.sh — Surgical swivel state register updates
+
+Usage:
+  swivel-update.sh [--file <path>] <command> [args...]
+
+Commands:
+  active <topic> <status>          Update active topic status
+  watch <name> <status>            Update watch item status + timestamp
+  alert-add <key> <message>        Add or update an alert
+  alert-clear <key>                Remove a specific alert
+  alerts-clear                     Reset all alerts to (none)
+  penpal <sent|received> <date>    Update penpal timestamps
+  pulse [timestamp]                Update pulse (default: now)
+  updated [timestamp]              Update updated timestamp (default: now)
+  topic-add <name> <status> <path> Append new active topic
+  topic-done <name>                Mark topic as DONE
+
+File resolution (in order):
+  --file <path>   explicit path
+  $SWIVEL_ROOT    environment variable
+  ./.swivel.md    default
+USAGE
+    exit 1
+    ;;
+esac
